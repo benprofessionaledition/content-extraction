@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from bs4 import BeautifulSoup, Tag
 import logging
 
+import math
 from math import exp, log
 
 logging.basicConfig()
@@ -18,7 +19,7 @@ included in the final output. There's some additional logic in there to ensure t
 tree is pulled out and not just the single highest text density node, while still excluding nodes 
 in that tree like image captions that aren't relevant. 
 
-The original code is a little painful as it's written in C++ and requires Qt (and doesn't compile), 
+The original code is a little painful, as it's written in C++ and requires Qt (and doesn't compile), 
 but other than a few bits, that code has been copied verbatim (while watching three straight seasons of Archer) 
 to ensure fidelity to the original algorithm. In a future release I may leverage aspects of 
 the bs4 library and the Python language to make this code cleaner and more performant.
@@ -28,12 +29,14 @@ yields vastly superior results on open web data.
 
 Original paper: http://ofey.me/papers/cetd-sigir11.pdf
 Original code: https://github.com/FeiSun/ContentExtraction
-"""
 
-# these constants are defined as NavigableStrings to
-# coincide with the original implementation's use of QString.
-# There isn't really a point to using these instead of raw values
-# other than ensuring this code corresponds directly to the original
+Todo list:
+- bs4 "descendants" eliminate the need for recursion
+- python list comprehensions are substantially more performant than for loops
+- destructively modifying DOM nodes is an antipattern 
+- reduce the number of passes over the DOM
+- figure out how to eliminate the need to constantly check if a pageelement is a tag or navigablestring
+"""
 
 KG_CHAR_NUM = 'char-number',
 KG_TAG_NUM = 'tag-number',
@@ -46,7 +49,7 @@ KG_MARK = 'mark',
 KG_GEOMETRY = 'geometry'
 
 
-def search_tag(web_element: Tag, attribute, value: float) -> Tag:
+def search_tag(web_element: Tag, attribute:str, value: float) -> Tag:
     """
     A method for returning the first occurrence of a Tag having the value specified
     for the attribute provided
@@ -55,7 +58,7 @@ def search_tag(web_element: Tag, attribute, value: float) -> Tag:
     :param value:
     :return:
     """
-    kws = {attribute: value}
+    kws = {attribute: str(value)}
     return web_element.find_next(**kws)
 
 
@@ -66,7 +69,7 @@ def is_link_tag(tag: Tag) -> bool:
     :param tag:
     :return:
     """
-    return repr(tag.name).lower() in {'a', 'button', 'select'}
+    return tag.name.lower() in {'a', 'button', 'select'}
 
 
 def find_max_density_sum(web_element: Tag) -> float:
@@ -77,10 +80,11 @@ def find_max_density_sum(web_element: Tag) -> float:
     :return:
     """
     max_density_sum = web_element[KG_DENSITY_SUM]
-    if isinstance(web_element, Tag):
-        for child in web_element.children:
+    temp_max = 0
+    for child in web_element.children:
+        if isinstance(child, Tag):
             temp_max = find_max_density_sum(child)
-            max_density_sum = max(temp_max, max_density_sum)
+        max_density_sum = max(temp_max, max_density_sum)
     web_element[KG_MAX_DENSITY_SUM] = max_density_sum
     return max_density_sum
 
@@ -101,8 +105,8 @@ def get_threshold(web_element: Tag, max_density_sum: float) -> float:
 
 def set_mark(web_element: Tag, mark: int):
     web_element[KG_MARK] = mark
-    if isinstance(web_element, Tag):
-        for child in web_element.children:
+    for child in web_element.children:
+        if isinstance(child, Tag):
             set_mark(child, mark)
 
 
@@ -253,7 +257,7 @@ class AbstractExtractor(ABC):
                 self.count_link_tags(child)
         if is_link_tag(web_element):
             linktag_num = web_element[KG_TAG_NUM]
-            self.update_link_chars(linktag_num)
+            self.update_link_chars(web_element)
         else:
             for child in web_element.children:
                 if isinstance(child, Tag):
@@ -285,7 +289,8 @@ class Extractor(AbstractExtractor):
         :return: void
         """
         if isinstance(web_element, Tag):
-            num_chars = len(repr(web_element.string).strip())
+            element_str = ' '.join(web_element.stripped_strings)
+            num_chars = len(element_str)
             web_element[KG_CHAR_NUM] = num_chars
             for child in web_element.children:
                 self.count_chars(child)
@@ -354,7 +359,7 @@ class Extractor(AbstractExtractor):
         """
         density_sum = 0.
         char_num_sum = 0
-        content = web_element.string
+        content = ' '.join(web_element.stripped_strings)
         from_ = 0
 
         if isinstance(web_element, Tag):
@@ -365,20 +370,19 @@ class Extractor(AbstractExtractor):
                 if isinstance(child, Tag):
                     density_sum += child[KG_TEXT_DENSITY]
                     char_num_sum += child[KG_CHAR_NUM]
-                    child_content = child.string
-                    # todo make sure web_element.string includes child strings
+                    child_content = ' '.join(child.stripped_strings)
                     try:
                         index = content.index(child_content)
                     except:
                         index = -1
                     if index > -1:
                         length = index - from_
-                        if length > 0:
-                            density_sum += length * log(1. * length) / log(log(ratio * length * exp(1.)))
+                        if length > 0 and ratio * length > (1 / math.e):
+                            density_sum += length * log(1. * length) / log(log(ratio * length * math.e))
                             from_ = index + len(child_content)
             length = len(content) - from_
-            if length > 0:
-                density_sum += length * log(1. * length) / log(log(ratio * length * exp(1.)))
+            if length > 0 and ratio * length > (1 / math.e):
+                density_sum += length * log(1. * length) / log(log(ratio * length * math.e))
 
             web_element[KG_DENSITY_SUM] = density_sum
 
