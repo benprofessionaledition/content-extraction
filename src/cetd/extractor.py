@@ -3,9 +3,30 @@ from math import log, exp
 
 from bs4 import BeautifulSoup, Tag, NavigableString, PageElement
 
+"""
+A pure Python implementation of content extraction via composite text density. The overall 
+idea of this algorithm is to detect which parts of a web page are relevant by comparing the "text 
+density," which is a metric derived from the ratio of hyperlink to non-hyperlink characters, of 
+all DOM nodes in the tree. Those DOM nodes determined to be relevant then have their text portions
+included in the final output. There's some additional logic in there to ensure that a comprehensive 
+tree is pulled out and not just the single highest text density node, while still excluding nodes 
+in that tree like image captions that aren't relevant. 
+
+The original code is a little painful as it's written in C++ and requires Qt (and doesn't compile), 
+but other than a few bits, that code has been copied verbatim (while watching three straight seasons of Archer) 
+to ensure fidelity to the original algorithm. In a future release I may leverage aspects of 
+the bs4 library and the Python language to make this code cleaner and more performant.
+
+This algorithm is currently in use as an alternative to Boilerplate and BS4 text extraction as it 
+yields vastly superior results on open web data. 
+
+Original paper: http://ofey.me/papers/cetd-sigir11.pdf
+Original code: https://github.com/FeiSun/ContentExtraction
+"""
+
 # these constants are defined as NavigableStrings to
 # coincide with the original implementation's use of QString.
-# There isn't really a point to using this instead of raw values
+# There isn't really a point to using these instead of raw values
 # other than ensuring this code corresponds directly to the original
 
 KG_CHAR_NUM = NavigableString('char-number'),
@@ -19,16 +40,74 @@ KG_MARK = NavigableString('mark'),
 KG_GEOMETRY = NavigableString('geometry')
 
 
-def search_tag(web_element, attribute, value: float):
-    pass
+def search_tag(web_element: PageElement, attribute: NavigableString, value: float) -> PageElement:
+    """
+    A method for returning the first occurrence of a PageElement having the value specified
+    for the attribute provided
+    :param web_element:
+    :param attribute:
+    :param value:
+    :return:
+    """
+    kws = {attribute, value}
+    return web_element.find_next(**kws)
 
-
-def get_file_list(path):
-    pass
-
-
-def is_link_tag(tag: Tag):
+def is_link_tag(tag: Tag) -> bool:
+    """
+    Returns true if the tag provided is a "link" tag, i.e. it contains
+    link text (like <a href=.../>) that we don't care about
+    :param tag:
+    :return:
+    """
     return repr(tag.name).lower() in {'a', 'button', 'select'}
+
+
+def find_max_density_sum(web_element: PageElement) -> float:
+    """
+    Finds the maximum density sum across all child nodes of the element
+    provided
+    :param web_element:
+    :return:
+    """
+    max_density_sum = float(web_element[KG_DENSITY_SUM])
+    temp_max = 0.
+    if isinstance(web_element, Tag):
+        for child in web_element.children:
+            temp_max = find_max_density_sum(child)
+            max_density_sum = max(temp_max, max_density_sum)
+    web_element[KG_MAX_DENSITY_SUM] = NavigableString(max_density_sum)
+
+
+def get_threshold(web_element: Tag, max_density_sum: float) -> float:
+    target = search_tag(web_element, KG_DENSITY_SUM, max_density_sum)
+    threshold = float(target[KG_TEXT_DENSITY])
+    set_mark(target, 1)
+    parent = target.parent
+    while parent.name.lower() != 'html':
+        text_density = float(parent[KG_TEXT_DENSITY])
+        threshold = min(threshold,
+                        text_density)  # i think... "if threshold - text_density > -1 * std::numeric_limits<double>::epsilon()" whatever the fuck that means
+        parent[KG_MARK] = NavigableString('2')  # magic constant
+        parent = parent.parent
+    return threshold
+
+
+def set_mark(web_element: PageElement, mark: int):
+    web_element[KG_MARK] = NavigableString(mark)
+    if isinstance(web_element, Tag):
+        for child in web_element.children:
+            set_mark(web_element, mark)
+
+
+def mark_content(web_element: PageElement, threshold: float):
+    text_density = float(web_element[KG_TEXT_DENSITY])
+    max_density_sum = float(web_element[KG_MAX_DENSITY_SUM])
+    mark = int(web_element[KG_MARK])
+    if mark != 1 and threshold > text_density:  # again, this is written a stupid way
+        find_max_density_sum(web_element, max_density_sum)
+        if isinstance(web_element, Tag):
+            for child in web_element.children:
+                mark_content(child, threshold)
 
 
 class AbstractExtractor(ABC):
@@ -39,7 +118,26 @@ class AbstractExtractor(ABC):
     """
 
     def extract_content(self, html: str) -> str:
-        bs = BeautifulSoup(html, 'html.parser').body
+        bs = BeautifulSoup(html, 'html.parser')
+        self.preprocess_dom(bs)
+        self.count_chars(bs)
+        self.count_tags(bs)
+        self.count_link_chars(bs)
+        self.count_link_tags(bs)
+        char_num = float(bs[KG_CHAR_NUM])
+        linkchar_num = float(bs[KG_LINKCHAR_NUM])
+        ratio = linkchar_num / char_num
+        self.compute_text_density(bs, ratio)
+        self.compute_density_sum(bs, ratio)
+        max_density_sum = find_max_density_sum(bs)
+        set_mark(bs, 0)
+        threshold = get_threshold(bs, max_density_sum)
+        mark_content(bs, threshold)
+        # we don't actually care about cleaning the tree or returning DOM nodes
+        kws = { KG_MARK: 0}
+        zero_elements = bs.find_all(**kws)
+        [z.extract() for z in zero_elements]
+        return bs.get_text()
 
     @abstractmethod
     def count_chars(self, web_element: Tag):
@@ -57,17 +155,31 @@ class AbstractExtractor(ABC):
     def compute_density_sum(self, web_element: Tag, ratio: float):
         pass
 
-    def find_max_density_sum(self, web_element: Tag) -> float:
-        pass
+    def preprocess_dom(self, web_element: PageElement):
+        """
+        Removes all nodes with the "display" property set to "none"
+        :param web_element:
+        :return:
+        """
+        target_args = {"display", "none"}
+        remove = web_element.find_all(**target_args)
+        [r.extract() for r in remove]
 
-    def get_threshold(self, web_element: Tag, max_density_sum: float) -> float:
-        pass
-
-    def set_mark(self, web_element: Tag, max_density_sum: float):
-        pass
-
-    def mark_content(self, web_element: Tag, threshold: float):
-        pass
+    def find_max_density_sum_tag(self, web_element: PageElement, max_density_sum: float):
+        """
+        Finds the tag having the max density sum and "marks" it for inclusion later
+        :param web_element:
+        :param max_density_sum:
+        :return:
+        """
+        target = search_tag(web_element, KG_DENSITY_SUM, max_density_sum)
+        mark = int(target[KG_MARK])
+        if mark != 1:
+            set_mark(target, 1)
+            parent = target.parent
+            while parent.name.lower() != 'html':
+                parent[KG_MARK] = NavigableString(2)  # magic constant, again
+                parent = parent.parent
 
     def count_tags(self, web_element: Tag):
         """
@@ -188,6 +300,14 @@ class Extractor(AbstractExtractor):
                 self.update_link_chars(child)
 
     def compute_text_density(self, web_element: Tag, ratio: float):
+        """
+        Computes the text density of the element provided, and recursively computes it for
+        the element's children. This number is essentially a ratio of non-link characters
+        to link characters.
+        :param web_element:
+        :param ratio:
+        :return:
+        """
         char_num = web_element[KG_CHAR_NUM]
         tag_num = web_element[KG_TAG_NUM]
         linkchar_num = web_element[KG_LINKCHAR_NUM]
@@ -217,14 +337,40 @@ class Extractor(AbstractExtractor):
                     self.compute_text_density(child, ratio)
 
     def compute_density_sum(self, web_element: PageElement, ratio: float):
+        """
+        Recursively omputes the sum of text density across the node provided and all subnodes
+        :param web_element:
+        :param ratio:
+        :return:
+        """
         density_sum = 0.
         char_num_sum = 0
         content = web_element.string
         from_ = 0
-        index = 0
-        length = 0
 
-        # if web_element.n
+        if isinstance(web_element, NavigableString):
+            density_sum = float(web_element[KG_TEXT_DENSITY])
+        elif isinstance(web_element, Tag):
+            for child in web_element.children:
+                self.compute_density_sum(child, ratio)
+            for child in web_element.children:
+                density_sum += float(child[KG_TEXT_DENSITY])
+                char_num_sum += int(child[KG_CHAR_NUM])
+                child_content = child.string
+                # todo make sure web_element.string includes child strings
+                try:
+                    index = content.index(child_content)
+                except:
+                    index = -1
+                if index > -1:
+                    length = index - from_
+                    if length > 0:
+                        density_sum += length * log(1. * length) / log(log(ratio * length * exp(1.)))
+                        from_ = index + len(child_content)
+            length = len(content) - from_
+            if length > 0:
+                density_sum += length * log(1. * length) / log(log(ratio * length * exp(1.)))
+        web_element[KG_DENSITY_SUM] = NavigableString(density_sum)
 
 
 class VariantExtractor(AbstractExtractor):
@@ -233,14 +379,75 @@ class VariantExtractor(AbstractExtractor):
     with methods described with a "variant" suffix
     """
 
-    def count_chars(self, web_element: Tag):
-        pass
+    def count_chars(self, web_element: PageElement):
+        """
+        Initializes the KG_CHAR_NUM attribute by actually counting
+        child characters not included in the current DOM element.
+        :param web_element:
+        :return:
+        """
+        char_num = 0
+        plain_text_length = len(web_element.string)
+        if not is_link_tag(web_element) and isinstance(web_element, Tag):
+            for child in web_element.children:
+                self.count_chars(child)
+            for child in web_element.children:
+                char_num += int(child[KG_CHAR_NUM])
+                child_plain_text_length = len(child.string)
+                plain_text_length -= child_plain_text_length
+            char_num = char_num + plain_text_length
+        web_element[KG_CHAR_NUM] = NavigableString(char_num)
 
-    def update_link_chars(self, web_element: Tag):
-        pass
+    def update_link_chars(self, web_element: PageElement):
+        """
+        Initializes the KG_CHAR_NUM attribute for all children of the
+        element provided to 0, not sure what the point is
+        :param web_element:
+        :return:
+        """
+        if isinstance(web_element, Tag):
+            for child in web_element.children:
+                child[KG_CHAR_NUM] = NavigableString(0)
+                self.update_link_chars(child)
 
-    def compute_text_density(self, web_element: Tag):
-        pass
+    def compute_text_density(self, web_element: PageElement):
+        """
+        Computes text density as a simple ratio of link to non-link characters
+        :param web_element:
+        :return:
+        """
+        char_num = int(web_element[KG_CHAR_NUM])
+        tag_num = int(web_element[KG_TAG_NUM])
+        text_density = 0.
+        if char_num != 0:
+            if tag_num == 0:
+                tag_num = 1
+            text_density = 1. * char_num / tag_num
+        web_element[KG_TEXT_DENSITY] = NavigableString(text_density)
+        if isinstance(web_element, Tag):
+            for child in web_element.children:
+                self.compute_text_density(child)
 
-    def compute_density_sum(self, web_element: Tag):
-        pass
+    def compute_density_sum(self, web_element: PageElement):
+        """
+        A simpler way of computing the density sum that doesn't do the normalization
+        steps that the default method uses
+        :param web_element:
+        :return:
+        """
+        density_sum = 0.
+        char_num_sum = 0.
+        if isinstance(web_element, Tag):
+            for child in web_element.children:
+                self.compute_density_sum(child)
+            for child in web_element.children:
+                density_sum += float(child[KG_TEXT_DENSITY])
+                char_num_sum += int(child[KG_CHAR_NUM])
+            char_num = int(web_element[KG_CHAR_NUM])
+            if char_num > char_num_sum:
+                char_num -= char_num_sum
+                density_sum += char_num
+        else:
+            density_sum = float(web_element[KG_TEXT_DENSITY])
+            web_element[KG_DENSITY_SUM] = NavigableString(density_sum)
+
