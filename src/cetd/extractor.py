@@ -80,7 +80,6 @@ def search_tag(web_element: Tag, attribute: str, value: float) -> Tag:
     :param value:
     :return:
     """
-    logger.debug("Searching tag %s" % (web_element.name))
     attribute = str(attribute)
     value = str(value)
     try:
@@ -118,7 +117,10 @@ def find_max_density_sum(web_element: Tag) -> float:
     :param web_element:
     :return:
     """
-    max_density_sum = web_element[KG_DENSITY_SUM]
+    try:
+        max_density_sum = web_element[KG_DENSITY_SUM]
+    except KeyError:
+        max_density_sum = 0
     temp_max = 0
     for child in web_element.children:
         if isinstance(child, Tag):
@@ -452,7 +454,7 @@ class VariantExtractor(AbstractExtractor):
         :return:
         """
         char_num = 0
-        plain_text_length = len(web_element.string)
+        plain_text_length = len(' '.join(web_element.stripped_strings))
         if not is_ignorable(web_element) and isinstance(web_element, Tag):
             for child in web_element.children:
                 if isinstance(child, Tag):
@@ -460,7 +462,7 @@ class VariantExtractor(AbstractExtractor):
             for child in web_element.children:
                 if isinstance(child, Tag):
                     char_num += child[KG_CHAR_NUM]
-                    child_plain_text_length = len(child.string)
+                    child_plain_text_length = len(' '.join(child.stripped_strings))
                     plain_text_length -= child_plain_text_length
             char_num = char_num + plain_text_length
         web_element[KG_CHAR_NUM] = char_num
@@ -474,8 +476,9 @@ class VariantExtractor(AbstractExtractor):
         """
         if isinstance(web_element, Tag):
             for child in web_element.children:
-                child[KG_CHAR_NUM] = 0
-                self.update_link_chars(child)
+                if isinstance(child, Tag):
+                    child[KG_CHAR_NUM] = 0
+                    self.update_link_chars(child)
 
     def compute_text_density(self, web_element: Tag, ratio=0.0):
         """
@@ -493,7 +496,8 @@ class VariantExtractor(AbstractExtractor):
         web_element[KG_TEXT_DENSITY] = text_density
         if isinstance(web_element, Tag):
             for child in web_element.children:
-                self.compute_text_density(child)
+                if isinstance(child, Tag):
+                    self.compute_text_density(child)
 
     def compute_density_sum(self, web_element: Tag, ratio=0.0):
         """
@@ -515,13 +519,13 @@ class VariantExtractor(AbstractExtractor):
             if char_num > char_num_sum:
                 char_num -= char_num_sum
                 density_sum += char_num
-        else:
-            density_sum = web_element[KG_TEXT_DENSITY]
-            web_element[KG_DENSITY_SUM] = density_sum
+            else:
+                density_sum = web_element[KG_TEXT_DENSITY]
+                web_element[KG_DENSITY_SUM] = density_sum
 
 
 if __name__ == '__main__':
-    sample = open('my_html_sample.html', 'rb').read().decode('utf-8', errors='ignore')
-    ext = Extractor()
+    sample = open('/Users/blevine/composite-text-density/nyt_html_sample.html', 'rb').read().decode('utf-8', errors='ignore')
+    ext = VariantExtractor()
     extr = ext.extract_content(sample)
     print(str(extr))
