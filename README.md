@@ -25,7 +25,7 @@ Original paper: http://ofey.me/papers/cetd-sigir11.pdf
 
 Original code: https://github.com/FeiSun/ContentExtraction
 
-### To Install:
+### To Install (Requires Python 3):
 `python setup.py install`
 
 That should work, otherwise all this project requires is `beautifulsoup4` from PyPI:
