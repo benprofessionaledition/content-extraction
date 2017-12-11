@@ -1,14 +1,14 @@
 # Content extraction via text density
 
-This is a small, single-file library for the purpose of to cleaning open web data (scraped HTML) to the point where 
-it can be used for machine learning and natural language processing.
+This is a small, single-file library for the purpose of cleaning open web data (scraped HTML) to the point where 
+it can be used for machine learning and natural language processing
 tasks. It does so by essentially comparing the ratio of hyperlink text to non-hyperlink text for each DOM node (the "text density"), then 
 extracting a cohesive tree based on that metric. It is based on a paper from the Beijing Institute of Technology, which is linked below. 
 
-This is a direct port of the authors' original C++/Qt code, and language- and library-specific optimizations have been foregone 
-to ensure fidelity to the original algorithm. The only significant deviation from the original code is that this implementation also excludes `style` and `script` nodes from the final output,
- regardless of their density scores. It also returns a cleaned version of the text instead of a DOM tree, but 
- this can be changed by removing like four lines in the `extract_content()` method.
+This is largely a direct port of the authors' original C++/Qt code, and language- and library-specific optimizations have been foregone 
+to ensure fidelity to the original algorithm. The only significant deviations from the original code are that this implementation also excludes `style` and `script` nodes from the final output,
+ regardless of their density scores, methods are encapsulated in objects where applicable, and the algorithm returns a cleaned version of the text instead of a DOM tree--but 
+ this can be changed by removing a few lines in the `extract_content()` method.
 
 
 Original paper: http://ofey.me/papers/cetd-sigir11.pdf
