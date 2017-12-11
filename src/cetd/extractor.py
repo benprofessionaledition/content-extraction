@@ -1,10 +1,10 @@
+import logging
+import re
 from abc import ABC, abstractmethod
 
-from bs4 import BeautifulSoup, Tag
-import logging
-
 import math
-from math import exp, log
+from bs4 import BeautifulSoup, Tag
+from math import log as ln
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
@@ -16,11 +16,11 @@ idea of this algorithm is to detect which parts of a web page are relevant by co
 density," which is a metric derived from the ratio of hyperlink to non-hyperlink characters, of 
 all DOM nodes in the tree. Those DOM nodes determined to be relevant then have their text portions
 included in the final output. There's some additional logic in there to ensure that a comprehensive 
-tree is pulled out and not just the single highest text density node, while still excluding nodes 
-in that tree like image captions that aren't relevant. 
+tree is pulled out and not just the single highest text density node. Additional logic can be implemented 
+to exclude nodes in that tree like image captions that aren't relevant. 
 
 The original code is a little painful, as it's written in C++ and requires Qt (and doesn't compile), 
-but other than a few bits, that code has been copied verbatim (while watching three straight seasons of Archer) 
+but other than a few bits, that code has been copied verbatim (while watching three and a half straight seasons of Archer) 
 to ensure fidelity to the original algorithm. In a future release I may leverage aspects of 
 the bs4 library and the Python language to make this code cleaner and more performant.
 
@@ -36,20 +36,42 @@ Todo list:
 - destructively modifying DOM nodes is an antipattern 
 - reduce the number of passes over the DOM
 - figure out how to eliminate the need to constantly check if a pageelement is a tag or navigablestring
+- algorithmic improvements: implement smoothing and add weight to characters in important tags
+- make it generalizable so more than link chars can be used to determine relevance 
 """
 
-KG_CHAR_NUM = 'char-number',
-KG_TAG_NUM = 'tag-number',
-KG_LINKCHAR_NUM = 'linkchar-number',
-KG_LINKTAG_NUM = 'linktag-number',
-KG_TEXT_DENSITY = 'text-density',
-KG_DENSITY_SUM = 'density-sum',
-KG_MAX_DENSITY_SUM = 'max-density-sum',
-KG_MARK = 'mark',
+KG_CHAR_NUM = 'char-number'
+KG_TAG_NUM = 'tag-number'
+KG_LINKCHAR_NUM = 'linkchar-number'
+KG_LINKTAG_NUM = 'linktag-number'
+KG_TEXT_DENSITY = 'text-density'
+KG_DENSITY_SUM = 'density-sum'
+KG_MAX_DENSITY_SUM = 'max-density-sum'
+KG_MARK = 'mark'
 KG_GEOMETRY = 'geometry'
 
+LINK_TAGS = {'a', 'button', 'select'}
+JS_TAGS = {'script', 'style'}
 
-def search_tag(web_element: Tag, attribute:str, value: float) -> Tag:
+whitespace_regex = re.compile(r'(\s{2,}|\t)')
+
+
+def first_child(web_element: Tag) -> Tag:
+    for c in web_element.children:
+        if isinstance(c, Tag):
+            return c
+
+
+def get_entry_point(dom: BeautifulSoup) -> Tag:
+    """
+    In the original code this is "document.firstChild().nextSibling()"
+    :param dom:
+    :return:
+    """
+    return dom.body
+
+
+def search_tag(web_element: Tag, attribute: str, value: float) -> Tag:
     """
     A method for returning the first occurrence of a Tag having the value specified
     for the attribute provided
@@ -58,18 +80,35 @@ def search_tag(web_element: Tag, attribute:str, value: float) -> Tag:
     :param value:
     :return:
     """
-    kws = {attribute: str(value)}
-    return web_element.find_next(**kws)
+    logger.debug("Searching tag %s" % (web_element.name))
+    attribute = str(attribute)
+    value = str(value)
+    try:
+        if web_element[attribute] == value:
+            return web_element
+    except KeyError:
+        pass  # ignore
+    kws = {attribute: value}
+    target = web_element.find_next(**kws)
+    if target is None:
+        # find the next usable sibling and search it
+        for sibling in web_element.descendants:
+            if isinstance(sibling, Tag):
+                target = search_tag(sibling, attribute, value)
+                break
+    return target
 
 
-def is_link_tag(tag: Tag) -> bool:
+def is_ignorable(tag: Tag, ignorables: set = LINK_TAGS.union(JS_TAGS)) -> bool:
     """
-    Returns true if the tag provided is a "link" tag, i.e. it contains
-    link text (like <a href=.../>) that we don't care about
+    Returns true if the tag provided is considered ignorable for the current use case.
+    By default this entails link text (like <a href=.../>) and javascript tags that
+    we don't care about. In the original paper only link tags were included, but that
+    was in 2011.
     :param tag:
     :return:
     """
-    return tag.name.lower() in {'a', 'button', 'select'}
+    return tag.name.lower() in ignorables
 
 
 def find_max_density_sum(web_element: Tag) -> float:
@@ -145,8 +184,13 @@ def preprocess_dom(web_element: Tag):
     :return:
     """
     target_args = {"display": "none"}
-    remove = web_element.find_all(**target_args)
+    remove = web_element.find_all(**target_args) + web_element.find_all(name='script') + web_element.find_all(
+        name='style')
     [r.extract() for r in remove]
+    # additionally remove js tags--not in original
+    for sib in web_element.next_siblings:
+        if isinstance(sib, Tag):
+            preprocess_dom(sib)
 
 
 class AbstractExtractor(ABC):
@@ -157,8 +201,8 @@ class AbstractExtractor(ABC):
     """
 
     def extract_content(self, html: str) -> str:
-        bs = BeautifulSoup(html, 'html.parser')
-        bs = bs.body
+        doc = BeautifulSoup(html, 'html.parser')
+        bs = get_entry_point(doc)
         preprocess_dom(bs)
         self.count_chars(bs)
         self.count_tags(bs)
@@ -169,7 +213,10 @@ class AbstractExtractor(ABC):
         ratio = linkchar_num / char_num
         self.compute_text_density(bs, ratio)
         self.compute_density_sum(bs, ratio)
+        # logger.debug("Density sums: ")
         max_density_sum = find_max_density_sum(bs)
+        # [logger.debug('Node name: %s \t Density sum: %f \t Max sum: %f' % (l.name, l[KG_DENSITY_SUM], max_density_sum))
+        #  for l in bs.descendants if isinstance(l, Tag)]
         set_mark(bs, 0)
         threshold = get_threshold(bs, max_density_sum)
         mark_content(bs, threshold)
@@ -177,7 +224,11 @@ class AbstractExtractor(ABC):
         kws = {KG_MARK: 0}
         zero_elements = bs.find_all(**kws)
         [z.extract() for z in zero_elements]
-        return bs.get_text()
+        output_dirty = bs.get_text()
+        # remove excess whitespace and duplicate newline characters
+        output_dirty = whitespace_regex.sub(' ', output_dirty)
+        output = '\n'.join(list(filter(lambda s: len(s.strip()) > 0, output_dirty.splitlines())))
+        return output
 
     @abstractmethod
     def count_chars(self, web_element: Tag):
@@ -221,7 +272,7 @@ class AbstractExtractor(ABC):
         for child in web_element.children:
             if isinstance(child, Tag):
                 self.count_link_chars(child)
-        if is_link_tag(web_element):
+        if is_ignorable(web_element):
             linkchar_num = web_element[KG_CHAR_NUM]
             self.update_link_chars(web_element)
         else:
@@ -255,14 +306,14 @@ class AbstractExtractor(ABC):
         for child in web_element.children:
             if isinstance(child, Tag):
                 self.count_link_tags(child)
-        if is_link_tag(web_element):
+        if is_ignorable(web_element):
             linktag_num = web_element[KG_TAG_NUM]
             self.update_link_chars(web_element)
         else:
             for child in web_element.children:
                 if isinstance(child, Tag):
                     linktag_num += child[KG_LINKTAG_NUM]
-                    if is_link_tag(child):
+                    if is_ignorable(child):
                         linktag_num += 1
                     else:
                         child_linktag_num = child[KG_LINKTAG_NUM]
@@ -341,11 +392,11 @@ class Extractor(AbstractExtractor):
                 un_linkchar_num = 1
 
             # this formula is copied directly from the src obviously
-            density = (1.0 * char_num / tag_num) * log(
-                (1.0 * char_num * tag_num) / (1.0 * linkchar_num * linktag_num)) / log(
-                log(1.0 * char_num * linkchar_num / un_linkchar_num + ratio * char_num + exp(1.0)))
+            density = (char_num / tag_num) * ln(
+                (char_num * tag_num) / (linkchar_num * linktag_num)) / ln(
+                ln(char_num * linkchar_num / un_linkchar_num + ratio * char_num + math.e))
 
-        web_element[KG_TEXT_DENSITY] = density
+        web_element[KG_TEXT_DENSITY] = max(density, 0)
         for child in web_element.children:
             if isinstance(child, Tag):
                 self.compute_text_density(child, ratio)
@@ -377,12 +428,12 @@ class Extractor(AbstractExtractor):
                         index = -1
                     if index > -1:
                         length = index - from_
-                        if length > 0 and ratio * length > (1 / math.e):
-                            density_sum += length * log(1. * length) / log(log(ratio * length * math.e))
+                        if length > 0:
+                            density_sum += length * ln(1. * length) / ln(ln(ratio * length + math.e))
                             from_ = index + len(child_content)
             length = len(content) - from_
             if length > 0 and ratio * length > (1 / math.e):
-                density_sum += length * log(1. * length) / log(log(ratio * length * math.e))
+                density_sum += length * ln(1. * length) / ln(ln(ratio * length + math.e))
 
             web_element[KG_DENSITY_SUM] = density_sum
 
@@ -402,7 +453,7 @@ class VariantExtractor(AbstractExtractor):
         """
         char_num = 0
         plain_text_length = len(web_element.string)
-        if not is_link_tag(web_element) and isinstance(web_element, Tag):
+        if not is_ignorable(web_element) and isinstance(web_element, Tag):
             for child in web_element.children:
                 if isinstance(child, Tag):
                     self.count_chars(child)
@@ -470,8 +521,7 @@ class VariantExtractor(AbstractExtractor):
 
 
 if __name__ == '__main__':
-    nyt_sample = open('/Users/blevine/composite-text-density/nyt_html_sample.html', 'rb').read().decode('utf-8',
-                                                                                                        errors='ignore')
+    sample = open('my_html_sample.html', 'rb').read().decode('utf-8', errors='ignore')
     ext = Extractor()
-    extr = ext.extract_content(nyt_sample)
+    extr = ext.extract_content(sample)
     print(str(extr))
