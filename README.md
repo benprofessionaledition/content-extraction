@@ -15,12 +15,15 @@ Original paper: http://ofey.me/papers/cetd-sigir11.pdf
 
 Original code: https://github.com/FeiSun/ContentExtraction
 
-### To Install (Requires Python 3):
+### To Install (Python 3.4+):
 `python setup.py install`
 
 That should work, otherwise all this project requires is `beautifulsoup4` from PyPI:
 
 `pip install beautifulsoup4`
+
+This code was written with Python 3.6.3. It will not work with Python versions prior to 3.4. 
+
 ### To use:
 ```angular2html
 from cetd.extractor import Extractor
