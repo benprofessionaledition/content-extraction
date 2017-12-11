@@ -1,25 +1,15 @@
 # Content extraction via text density
-Anyone who has ever played with actual web data and not just Twitter datasets knows that web data is complete garbage. This is
-a pure Python implementation of content extraction via composite text density. The overall 
-idea of the algorithm is to detect which parts of a web page are relevant by comparing the "text 
-density," which is a metric derived from the ratio of hyperlink to non-hyperlink characters, of 
-all DOM nodes in the tree. Those DOM nodes determined to be relevant then have their text portions
-included in the final output. There's some additional logic in there to ensure that a comprehensive 
-tree is pulled out and not just the single highest text density node. Additional logic can be implemented 
-to exclude nodes in that tree like image captions that aren't relevant. 
+This is a small pure Python library that serves the purpose of extracting the actual content of raw HTML. 
+It does so by essentially comparing the ratio of hyperlink text to non-hyperlink text for each DOM node (the "text density"), then 
+extracting a cohesive tree based on that metric.
 
-The original code is a little painful, as it's written in C++ and requires Qt, 
-but other than a few bits, that code has largely been copied verbatim (while watching three and a half straight seasons of Archer) 
-to ensure fidelity to the original algorithm. In a future release I may leverage aspects of 
-the bs4 library and the Python language to make this code cleaner and more performant. 
-The only significant deviation from the original code is that this implementation also excludes `style` and `script` nodes from the final output,
- regardless of their density scores. The original paper was published in 2011, 
-so I'll give them a break for that. 
+This is a direct port of the original C++/Qt code, and language- and library-specific optimizations have been foregone 
+to ensure fidelity to the original algorithm. The only significant deviation from the original code is that this implementation also excludes `style` and `script` nodes from the final output,
+ regardless of their density scores. 
 
 The intended use case of this algorithm is to clean open web data to the point where 
 it can be used for machine learning and natural language processing 
-tasks. Some garbage will always be present, but TF-IDF/BM25F usually takes 
-care of all that. 
+tasks.
 
 Original paper: http://ofey.me/papers/cetd-sigir11.pdf
 

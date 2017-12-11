@@ -15,29 +15,10 @@ A pure Python implementation of content extraction via composite text density. T
 idea of this algorithm is to detect which parts of a web page are relevant by comparing the "text 
 density," which is a metric derived from the ratio of hyperlink to non-hyperlink characters, of 
 all DOM nodes in the tree. Those DOM nodes determined to be relevant then have their text portions
-included in the final output. There's some additional logic in there to ensure that a comprehensive 
-tree is pulled out and not just the single highest text density node. Additional logic can be implemented 
-to exclude nodes in that tree like image captions that aren't relevant. 
-
-The original code is a little painful, as it's written in C++ and requires Qt (and doesn't compile), 
-but other than a few bits, that code has been copied verbatim (while watching three and a half straight seasons of Archer) 
-to ensure fidelity to the original algorithm. In a future release I may leverage aspects of 
-the bs4 library and the Python language to make this code cleaner and more performant.
-
-This algorithm is currently in use as an alternative to Boilerplate and BS4 text extraction as it 
-yields vastly superior results on open web data. 
+included in the final output. 
 
 Original paper: http://ofey.me/papers/cetd-sigir11.pdf
 Original code: https://github.com/FeiSun/ContentExtraction
-
-Todo list:
-- bs4 "descendants" eliminate the need for recursion
-- python list comprehensions are substantially more performant than for loops
-- destructively modifying DOM nodes is an antipattern 
-- reduce the number of passes over the DOM
-- figure out how to eliminate the need to constantly check if a pageelement is a tag or navigablestring
-- algorithmic improvements: implement smoothing and add weight to characters in important tags
-- make it generalizable so more than link chars can be used to determine relevance 
 """
 
 KG_CHAR_NUM = 'char-number'
