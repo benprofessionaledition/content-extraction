@@ -160,33 +160,25 @@ def find_max_density_sum_tag(web_element: Tag, max_density_sum: float):
             parent = parent.parent
 
 
-def preprocess_dom(web_element: Tag):
-    """
-    Removes all nodes with the "display" property set to "none"
-    :param web_element:
-    :return:
-    """
-    target_args = {"display": "none"}
-    remove = web_element.find_all(**target_args) + web_element.find_all(name='script') + web_element.find_all(
-        name='style')
-    [r.extract() for r in remove]
-    # additionally remove js tags--not in original
-    for sib in web_element.next_siblings:
-        if isinstance(sib, Tag):
-            preprocess_dom(sib)
-
-
 class AbstractExtractor(ABC):
     """
     An abstract superclass encapsulating most of the functionality of
     the composite text density extraction algorithm, leaving a few methods
     open to variable implementations
     """
+    def __init__(self, removables=JS_TAGS, ignorable_tags=LINK_TAGS.union(JS_TAGS)):
+        """
+        Initialize the abstract superclass by defining removable and ignorable tags
+        :param removables: tags that will be removed entirely from the final output
+        :param ignorable_tags: tags whose content will be weighted as undesirable content
+        """
+        self.removables = removables
+        self.ignorable_tags = ignorable_tags
 
     def extract_content(self, html: str) -> str:
         doc = BeautifulSoup(html, 'html.parser')
         bs = get_entry_point(doc)
-        preprocess_dom(bs)
+        self.preprocess_dom(bs)
         self.count_chars(bs)
         self.count_tags(bs)
         self.count_link_chars(bs)
@@ -229,6 +221,20 @@ class AbstractExtractor(ABC):
     def compute_density_sum(self, web_element: Tag, ratio: float):
         pass
 
+    def preprocess_dom(self, web_element: Tag):
+        """
+        Removes all nodes with the "display" property set to "none"
+        :param web_element:
+        :return:
+        """
+        target_args = {"display": "none"}
+        remove = web_element.find_all(**target_args) + web_element.find_all(*self.removables)
+        [r.extract() for r in remove]
+        # additionally remove js tags--not in original
+        for sib in web_element.next_siblings:
+            if isinstance(sib, Tag):
+                self.preprocess_dom(sib)
+
     def count_tags(self, web_element: Tag):
         """
         Counts the number of tags in the children of the element provided
@@ -255,7 +261,7 @@ class AbstractExtractor(ABC):
         for child in web_element.children:
             if isinstance(child, Tag):
                 self.count_link_chars(child)
-        if is_ignorable(web_element):
+        if is_ignorable(web_element, self.ignorable_tags):
             linkchar_num = web_element[KG_CHAR_NUM]
             self.update_link_chars(web_element)
         else:
@@ -289,14 +295,14 @@ class AbstractExtractor(ABC):
         for child in web_element.children:
             if isinstance(child, Tag):
                 self.count_link_tags(child)
-        if is_ignorable(web_element):
+        if is_ignorable(web_element, self.ignorable_tags):
             linktag_num = web_element[KG_TAG_NUM]
             self.update_link_chars(web_element)
         else:
             for child in web_element.children:
                 if isinstance(child, Tag):
                     linktag_num += child[KG_LINKTAG_NUM]
-                    if is_ignorable(child):
+                    if is_ignorable(child, self.ignorable_tags):
                         linktag_num += 1
                     else:
                         child_linktag_num = child[KG_LINKTAG_NUM]
@@ -436,7 +442,7 @@ class VariantExtractor(AbstractExtractor):
         """
         char_num = 0
         plain_text_length = len(' '.join(web_element.stripped_strings))
-        if not is_ignorable(web_element) and isinstance(web_element, Tag):
+        if not is_ignorable(web_element, self.ignorable_tags) and isinstance(web_element, Tag):
             for child in web_element.children:
                 if isinstance(child, Tag):
                     self.count_chars(child)
@@ -504,9 +510,15 @@ class VariantExtractor(AbstractExtractor):
                 density_sum = web_element[KG_TEXT_DENSITY]
                 web_element[KG_DENSITY_SUM] = density_sum
 
+class EDGARExtractor(Extractor):
+
+    def __init__(self):
+        self.removables = ['table', 'font', 'sup']
+        self.ignorable_tags = LINK_TAGS
+
 
 if __name__ == '__main__':
-    sample = open('/Users/blevine/composite-text-density/nyt_html_sample.html', 'rb').read().decode('utf-8', errors='ignore')
+    sample = open('/Users/blevine/composite-text-density/SEC-APPL-10K.html', 'rb').read().decode('utf-8', errors='ignore')
     ext = VariantExtractor()
     extr = ext.extract_content(sample)
     print(str(extr))
