@@ -42,16 +42,6 @@ def first_child(web_element: Tag) -> Tag:
         if isinstance(c, Tag):
             return c
 
-
-def get_entry_point(dom: BeautifulSoup) -> Tag:
-    """
-    In the original code this is "document.firstChild().nextSibling()"
-    :param dom:
-    :return:
-    """
-    return dom.body
-
-
 def search_tag(web_element: Tag, attribute: str, value: float) -> Tag:
     """
     A method for returning the first occurrence of a Tag having the value specified
@@ -175,9 +165,11 @@ class AbstractExtractor(ABC):
         self.removables = removables
         self.ignorable_tags = ignorable_tags
 
+    def create_doc(self, html: str) -> Tag:
+        return BeautifulSoup(html, 'html.parser').body
+
     def extract_content(self, html: str) -> str:
-        doc = BeautifulSoup(html, 'html.parser')
-        bs = get_entry_point(doc)
+        bs = self.create_doc(html)
         self.preprocess_dom(bs)
         self.count_chars(bs)
         self.count_tags(bs)
@@ -188,7 +180,7 @@ class AbstractExtractor(ABC):
         ratio = linkchar_num / char_num
         self.compute_text_density(bs, ratio)
         self.compute_density_sum(bs, ratio)
-        # logger.debug("Density sums: ")
+        logger.debug("Density sums: ")
         max_density_sum = find_max_density_sum(bs)
         # [logger.debug('Node name: %s \t Density sum: %f \t Max sum: %f' % (l.name, l[KG_DENSITY_SUM], max_density_sum))
         #  for l in bs.descendants if isinstance(l, Tag)]
@@ -510,15 +502,49 @@ class VariantExtractor(AbstractExtractor):
                 density_sum = web_element[KG_TEXT_DENSITY]
                 web_element[KG_DENSITY_SUM] = density_sum
 
+html_tag_regex = re.compile(r'(<HTML>|<html>)(.*)(</HTML>|</html>)')
+
 class EDGARExtractor(Extractor):
 
     def __init__(self):
-        self.removables = ['table', 'font', 'sup']
-        self.ignorable_tags = LINK_TAGS
+        self.removables = JS_TAGS
+        self.ignorable_tags = LINK_TAGS.union(JS_TAGS)
+
+    def create_doc(self, html: str) -> BeautifulSoup:
+        start = html.index('<html>')
+        end = html.index('</html>') + len('</html')
+        s = html[start:end + 1]
+        return BeautifulSoup(s, 'html.parser').body
+
+    def extract_content(self, html: str) -> str:
+        bs = self.create_doc(html)
+        self.preprocess_dom(bs)
+        self.count_chars(bs)
+        self.count_tags(bs)
+        self.count_link_chars(bs)
+        self.count_link_tags(bs)
+        char_num = bs[KG_CHAR_NUM]
+        linkchar_num = bs[KG_LINKCHAR_NUM]
+        ratio = linkchar_num / char_num
+        self.compute_text_density(bs, ratio)
+        self.compute_density_sum(bs, ratio)
+
+        # kill everything with no density
+        kws = {KG_DENSITY_SUM: 0}
+        zero_elements = bs.find_all(**kws)
+        [z.extract() for z in zero_elements]
+        output_dirty = bs.get_text()
+        # remove excess whitespace and duplicate newline characters
+        output_dirty = whitespace_regex.sub(' ', output_dirty)
+        output = '\n'.join(list(filter(lambda s: len(s.strip()) > 0, output_dirty.splitlines())))
+        return output
 
 
 if __name__ == '__main__':
-    sample = open('/Users/blevine/composite-text-density/SEC-APPL-10K.html', 'rb').read().decode('utf-8', errors='ignore')
-    ext = VariantExtractor()
+    sample = open('/Users/blevine/composite-text-density/SEC-AAPL-10K.txt', 'rb').read().decode('utf-8', errors='ignore')
+    ext = EDGARExtractor()
     extr = ext.extract_content(sample)
-    print(str(extr))
+    # write to file
+    SEC_APPL = open('SEC-AAPL-10K-clean.txt', 'wb')
+    SEC_APPL.write(extr.encode('utf8', errors='ignore'))
+    print('Wrote %d characters to file' % (len(extr)))
